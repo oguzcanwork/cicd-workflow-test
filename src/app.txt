@@ -1,6 +1,3 @@
 [App]
-version: 1.0.0
+version: 2.0.0
 env: production
-feature_flags:
-  agent_payments: true   # devx-only
-  commission_v2: true    # devx-only

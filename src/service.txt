@@ -2,5 +2,3 @@
 method: processPayment()
 method: refundPayment()
 method: validateCard()
-method: notifyAgent()         # devx-only: agent notification
-method: calculateCommission() # devx-only: commission engine
