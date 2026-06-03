@@ -2,4 +2,8 @@
 route: POST /payments
 route: POST /payments/refund
 route: GET  /internal/commission  # devx-only
+<<<<<<< HEAD
 route: POST /internal/ads/deposit  # devx-only new
+=======
+fix: t6 cascade hotfix 1780491034
+>>>>>>> origin/test
