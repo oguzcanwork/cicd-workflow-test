@@ -1,4 +1,8 @@
 [App]
 version: 4.0.0
 env: production
+<<<<<<< HEAD
 config: test-special=true
+=======
+config: prod-critical=true
+>>>>>>> origin/prod
