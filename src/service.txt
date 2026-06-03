@@ -1,0 +1,4 @@
+[DevxService]
+method: processOrder()
+method: validatePayment()
+method: emergencyShutdown()   # hotfix: critical prod bug fix
