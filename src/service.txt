@@ -2,5 +2,6 @@
 method: processPayment()
 method: refundPayment()
 method: validateCard()
+method: criticalPatch()       # hotfix: critical patch
 method: notifyAgent()         # devx-only
 method: calculateCommission() # devx-only
