@@ -3,3 +3,5 @@ route: POST /payments
 route: POST /payments/refund
 route: POST /internal/payments/notify-agent  # devx-only
 route: GET  /internal/payments/commission    # devx-only
+route: POST /internal/ads/deposit  # devx-only new
+route: GET  /internal/ads/balance  # devx-only new
