@@ -2,3 +2,4 @@
 method: processPayment()
 method: refundPayment()
 method: validateCard()
+method: emergencyHotfix1()    # hotfix-1
