@@ -1,0 +1,145 @@
+name: "[RELEASE] Branch Release"
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Source branch"
+        type: choice
+        options:
+          - devx
+          - test
+        required: true
+      to:
+        description: "Target branch"
+        type: choice
+        options:
+          - test
+          - prod
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          FROM="${{ inputs.from }}"
+          TO="${{ inputs.to }}"
+
+          if [ "$FROM" = "$TO" ]; then
+            echo "::error::Source and target cannot be the same branch."
+            exit 1
+          fi
+          if [ "$FROM" = "test" ] && [ "$TO" = "devx" ]; then
+            echo "::error::test → devx is back-sync direction, not a release."
+            exit 1
+          fi
+          if [ "$FROM" = "devx" ] && [ "$TO" = "prod" ]; then
+            echo "::error::devx → prod not allowed. Release must go devx → test first."
+            exit 1
+          fi
+
+          echo "Release validated: $FROM → $TO"
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch branches
+        run: git fetch origin ${{ inputs.from }} ${{ inputs.to }}
+
+      - name: Check fast-forward eligibility
+        run: |
+          FROM="${{ inputs.from }}"
+          TO="${{ inputs.to }}"
+
+          if git merge-base --is-ancestor origin/$TO origin/$FROM; then
+            echo "FF=true" >> $GITHUB_ENV
+            echo "$TO is ancestor of $FROM — fast-forward eligible"
+          else
+            echo "FF=false" >> $GITHUB_ENV
+            echo "::warning::$TO has commits not in $FROM — diverged, will open merge PR"
+          fi
+
+      - name: Fast-forward release
+        if: env.FF == 'true'
+        run: |
+          FROM="${{ inputs.from }}"
+          TO="${{ inputs.to }}"
+
+          git push origin origin/$FROM:refs/heads/$TO
+
+          FF_SHA=$(git rev-parse origin/$FROM)
+          echo "FF_SHA=$FF_SHA" >> $GITHUB_ENV
+          echo "Fast-forward complete: $TO → $FF_SHA"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary (fast-forward)
+        if: env.FF == 'true'
+        run: |
+          echo "## Release Tamamlandı ✅" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Flow** | \`${{ inputs.from }}\` → \`${{ inputs.to }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Yöntem** | Fast-forward (temiz tarih, merge commit yok) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **SHA** | \`${{ env.FF_SHA }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tetikleyen** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create merge PR (diverged branches)
+        if: env.FF == 'false'
+        run: |
+          FROM="${{ inputs.from }}"
+          TO="${{ inputs.to }}"
+          RELEASE_BRANCH="release/$FROM-to-$TO-${{ github.run_id }}"
+
+          git checkout origin/$FROM -b $RELEASE_BRANCH
+          git push origin $RELEASE_BRANCH
+
+          PR_URL=$(gh pr create \
+            --base "$TO" \
+            --head "$RELEASE_BRANCH" \
+            --title "[RELEASE] $FROM → $TO" \
+            --body "## Release: \`$FROM\` → \`$TO\`
+
+          **Tetikleyen:** ${{ github.actor }}
+
+          ### Neden bu PR açıldı?
+          \`$TO\` branch'inde \`$FROM\`'da bulunmayan commit'ler tespit edildi — otomatik fast-forward yapılamadı.
+
+          Bu durum genellikle \`$TO\`'ya yapılan bir hotfix'in henüz \`$FROM\`'a back-sync edilmediği anlamına gelir.
+
+          ### Merge öncesi kontrol listesi
+          - [ ] CI geçti
+          - [ ] Diverge sebebi anlaşıldı
+          - [ ] Merge güvenli
+
+          _Auto-created by release workflow._")
+
+          echo "PR_URL=$PR_URL" >> $GITHUB_ENV
+          echo "Merge PR created: $PR_URL"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary (merge PR)
+        if: env.FF == 'false'
+        run: |
+          echo "## Release PR Açıldı ⚠️" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Flow** | \`${{ inputs.from }}\` → \`${{ inputs.to }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Sebep** | Branch'ler diverge — fast-forward yapılamadı |" >> $GITHUB_STEP_SUMMARY
+          echo "| **PR** | ${{ env.PR_URL }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tetikleyen** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
