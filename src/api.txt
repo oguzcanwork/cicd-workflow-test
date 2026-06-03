@@ -1,3 +1,6 @@
 [API]
 route: POST /payments
 route: POST /payments/refund
+
+route: POST /internal/agent/notify   # devx-only
+route: GET  /internal/commission     # devx-only
