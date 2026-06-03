@@ -2,3 +2,4 @@
 method: processPayment()
 method: refundPayment()
 method: validateCard()
+method: criticalPatch()       # hotfix: conflict with devx
