@@ -1,4 +1,8 @@
 [App]
 version: 4.0.0
 env: production
+<<<<<<< HEAD
 fix: t7 hotfix for skip test
+=======
+fix: hotfix-2 unrelated fix 1780491375
+>>>>>>> origin/test
