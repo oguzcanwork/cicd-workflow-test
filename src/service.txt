@@ -2,5 +2,9 @@
 method: processPayment()
 method: refundPayment()
 method: validateCard()
+<<<<<<< HEAD
 method: notifyAgent()         # devx-only
 method: calculateCommission() # devx-only
+=======
+method: criticalPatch()       # hotfix: conflict with devx
+>>>>>>> origin/test
