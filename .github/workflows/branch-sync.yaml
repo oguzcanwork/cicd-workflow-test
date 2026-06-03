@@ -137,7 +137,7 @@ jobs:
     if: >
       github.event.pull_request.base.ref == 'test' &&
       github.event.pull_request.merged == true &&
-      !startsWith(github.event.pull_request.head.ref, 'sync/') &&
+      !startsWith(github.event.pull_request.head.ref, 'sync/test-to-devx') &&
       !startsWith(github.event.pull_request.head.ref, 'release/')
     steps:
       - name: Checkout repo
