@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Configure Git
         run: |
@@ -36,7 +36,7 @@ jobs:
           echo "COMMITS=$COMMITS" >> $GITHUB_ENV
           echo "PR commits: $COMMITS"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Cherry-pick commits to test
         id: cherry_pick
@@ -119,7 +119,7 @@ jobs:
           PR_NUMBER=$(echo $PR_URL | grep -oE '[0-9]+$')
           gh pr merge $PR_NUMBER --merge --delete-branch --admin
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Create PR and leave open (has conflicts)
         if: env.HAS_CONFLICT == 'true'
@@ -130,7 +130,7 @@ jobs:
             --title "[SYNC] prod → test (PR #${{ github.event.pull_request.number }}) - CONFLICT" \
             --body "Conflict detected. Manual resolution required.<br>Failed commits: \`${{ env.FAILED_COMMITS }}\`"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
   sync-test-to-devx:
     runs-on: ubuntu-latest
@@ -144,7 +144,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Configure Git
         run: |
@@ -157,7 +157,7 @@ jobs:
           echo "COMMITS=$COMMITS" >> $GITHUB_ENV
           echo "PR commits: $COMMITS"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Cherry-pick commits to devx
         id: cherry_pick
@@ -243,7 +243,7 @@ jobs:
           PR_NUMBER=$(echo $PR_URL | grep -oE '[0-9]+$')
           gh pr merge $PR_NUMBER --merge --delete-branch --admin
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Create PR and leave open (has conflicts)
         if: env.HAS_CONFLICT == 'true'
@@ -254,4 +254,4 @@ jobs:
             --title "[SYNC] test → devx (PR #${{ github.event.pull_request.number }}) - CONFLICT" \
             --body "Conflict detected. Manual resolution required.<br>**Bazı commit'ler otomatik uygulanamadı:**<br>\`${{ env.FAILED_COMMITS }}\`"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
