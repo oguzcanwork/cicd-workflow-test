@@ -1,5 +1,4 @@
-[DevxService]
-method: processOrder()
-method: validatePayment()
-method: notifyAgent()        # devx-only: yeni agent notification feature
-method: calculateCommission() # devx-only: commission hesaplama
+[PaymentService]
+method: processPayment()
+method: refundPayment()
+method: validateCard()
