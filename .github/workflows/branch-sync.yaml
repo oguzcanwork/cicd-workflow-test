@@ -1,0 +1,257 @@
+name: "[SYNC] Branch Sync (prod→test→devx)"
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - prod
+      - test
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-prod-to-test:
+    runs-on: ubuntu-latest
+    if: >
+      github.event.pull_request.base.ref == 'prod' &&
+      github.event.pull_request.merged == true &&
+      !startsWith(github.event.pull_request.head.ref, 'sync/')
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get PR commits
+        run: |
+          COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits[].oid' | tr '\n' ' ')
+          echo "COMMITS=$COMMITS" >> $GITHUB_ENV
+          echo "PR commits: $COMMITS"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cherry-pick commits to test
+        id: cherry_pick
+        run: |
+          TARGET_BRANCH="test"
+          SYNC_BRANCH="sync/prod-to-test-${{ github.run_id }}"
+          HAS_CONFLICT=false
+          FAILED_COMMITS=""
+
+          git checkout $TARGET_BRANCH
+          git pull origin $TARGET_BRANCH
+          git checkout -b $SYNC_BRANCH
+
+          for COMMIT in $COMMITS; do
+            echo "Cherry-picking $COMMIT..."
+
+            if git cherry-pick -x -X theirs $COMMIT 2>/dev/null; then
+              echo "  Clean cherry-pick for $COMMIT"
+              continue
+            fi
+
+            if [ -z "$(git ls-files -u --no-empty-directory)" ]; then
+              echo "  Empty cherry-pick for $COMMIT (already in target), skipping"
+              git cherry-pick --skip 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
+              continue
+            fi
+
+            echo "  Conflict for $COMMIT, applying theirs strategy..."
+
+            git ls-files -u --no-empty-directory | awk '{print $4}' | sort -u | while IFS= read -r FILE; do
+              if git cat-file -e "${COMMIT}:${FILE}" 2>/dev/null; then
+                mkdir -p "$(dirname "$FILE")"
+                git show "${COMMIT}:${FILE}" > "$FILE"
+                git add "$FILE"
+                echo "    Resolved $FILE (accepted from commit)"
+              else
+                git rm -f "$FILE" 2>/dev/null || true
+                echo "    Resolved $FILE (deleted as in commit)"
+              fi
+            done
+
+            git add -A
+
+            if GIT_EDITOR=true git cherry-pick --continue 2>/dev/null; then
+              echo "  Auto-resolved $COMMIT"
+              continue
+            fi
+
+            echo "  Auto-resolve incomplete for $COMMIT, committing for manual review"
+            rm -f .git/CHERRY_PICK_HEAD .git/MERGE_MSG 2>/dev/null || true
+
+            if git diff --cached --quiet && git diff --quiet; then
+              echo "  No staged changes; skipping $COMMIT"
+            else
+              GIT_EDITOR=true git commit --no-verify -m "[CONFLICT] cherry-pick of $COMMIT — manual resolution required"
+              HAS_CONFLICT=true
+              FAILED_COMMITS="$FAILED_COMMITS $COMMIT"
+            fi
+          done
+
+          git push origin $SYNC_BRANCH
+
+          NEW_COMMIT_COUNT=$(git rev-list --count "origin/${TARGET_BRANCH}..${SYNC_BRANCH}" 2>/dev/null || echo "0")
+          if [ "$NEW_COMMIT_COUNT" = "0" ]; then
+            echo "SKIP_PR=true" >> $GITHUB_ENV
+          fi
+
+          echo "SYNC_BRANCH=$SYNC_BRANCH" >> $GITHUB_ENV
+          echo "HAS_CONFLICT=$HAS_CONFLICT" >> $GITHUB_ENV
+          echo "FAILED_COMMITS=$FAILED_COMMITS" >> $GITHUB_ENV
+
+      - name: Create PR and merge (no conflicts)
+        if: env.HAS_CONFLICT == 'false' && env.SKIP_PR != 'true'
+        run: |
+          PR_URL=$(gh pr create \
+            --base "test" \
+            --head "$SYNC_BRANCH" \
+            --title "[SYNC] prod → test (PR #${{ github.event.pull_request.number }})" \
+            --body "Automated sync from PR #${{ github.event.pull_request.number }}<br><br>**Flow:** \`prod\` → \`test\` → \`devx\`")
+          PR_NUMBER=$(echo $PR_URL | grep -oE '[0-9]+$')
+          gh pr merge $PR_NUMBER --merge --delete-branch --admin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create PR and leave open (has conflicts)
+        if: env.HAS_CONFLICT == 'true'
+        run: |
+          gh pr create \
+            --base "test" \
+            --head "$SYNC_BRANCH" \
+            --title "[SYNC] prod → test (PR #${{ github.event.pull_request.number }}) - CONFLICT" \
+            --body "Conflict detected. Manual resolution required.<br>Failed commits: \`${{ env.FAILED_COMMITS }}\`"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sync-test-to-devx:
+    runs-on: ubuntu-latest
+    if: >
+      github.event.pull_request.base.ref == 'test' &&
+      github.event.pull_request.merged == true &&
+      !startsWith(github.event.pull_request.head.ref, 'sync/') &&
+      !startsWith(github.event.pull_request.head.ref, 'release/')
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get PR commits
+        run: |
+          COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits[].oid' | tr '\n' ' ')
+          echo "COMMITS=$COMMITS" >> $GITHUB_ENV
+          echo "PR commits: $COMMITS"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cherry-pick commits to devx
+        id: cherry_pick
+        run: |
+          TARGET_BRANCH="devx"
+          SYNC_BRANCH="sync/test-to-devx-${{ github.run_id }}"
+          HAS_CONFLICT=false
+          FAILED_COMMITS=""
+
+          git checkout $TARGET_BRANCH
+          git pull origin $TARGET_BRANCH
+          git checkout -b $SYNC_BRANCH
+
+          for COMMIT in $COMMITS; do
+            echo "Cherry-picking $COMMIT..."
+
+            # -X ours: devx version wins on conflict — prevents incoming
+            # test commits from clobbering devx-only code.
+            if git cherry-pick -x -X ours $COMMIT 2>/dev/null; then
+              echo "  Clean cherry-pick for $COMMIT"
+              continue
+            fi
+
+            if [ -z "$(git ls-files -u --no-empty-directory)" ]; then
+              echo "  Empty cherry-pick for $COMMIT (already in target), skipping"
+              git cherry-pick --skip 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
+              continue
+            fi
+
+            echo "  Conflict for $COMMIT, preserving devx version..."
+
+            git ls-files -u --no-empty-directory | awk '{print $4}' | sort -u | while IFS= read -r FILE; do
+              if git cat-file -e "HEAD:${FILE}" 2>/dev/null; then
+                # File exists in devx — keep devx version.
+                git checkout --ours "$FILE"
+                git add "$FILE"
+                echo "    Resolved $FILE (kept devx version)"
+              else
+                # File was deleted in devx — keep the deletion.
+                git rm -f "$FILE" 2>/dev/null || true
+                echo "    Resolved $FILE (kept devx deletion)"
+              fi
+            done
+
+            git add -A
+
+            if GIT_EDITOR=true git cherry-pick --continue 2>/dev/null; then
+              echo "  Auto-resolved $COMMIT (devx version preserved)"
+              continue
+            fi
+
+            echo "  Auto-resolve incomplete for $COMMIT, committing for manual review"
+            rm -f .git/CHERRY_PICK_HEAD .git/MERGE_MSG 2>/dev/null || true
+
+            if git diff --cached --quiet && git diff --quiet; then
+              echo "  No staged changes; skipping $COMMIT"
+            else
+              GIT_EDITOR=true git commit --no-verify -m "[CONFLICT] cherry-pick of $COMMIT — manual resolution required"
+              HAS_CONFLICT=true
+              FAILED_COMMITS="$FAILED_COMMITS $COMMIT"
+            fi
+          done
+
+          git push origin $SYNC_BRANCH
+
+          NEW_COMMIT_COUNT=$(git rev-list --count "origin/${TARGET_BRANCH}..${SYNC_BRANCH}" 2>/dev/null || echo "0")
+          if [ "$NEW_COMMIT_COUNT" = "0" ]; then
+            echo "SKIP_PR=true" >> $GITHUB_ENV
+          fi
+
+          echo "SYNC_BRANCH=$SYNC_BRANCH" >> $GITHUB_ENV
+          echo "HAS_CONFLICT=$HAS_CONFLICT" >> $GITHUB_ENV
+          echo "FAILED_COMMITS=$FAILED_COMMITS" >> $GITHUB_ENV
+
+      - name: Create PR and merge (no conflicts)
+        if: env.HAS_CONFLICT == 'false' && env.SKIP_PR != 'true'
+        run: |
+          PR_URL=$(gh pr create \
+            --base "devx" \
+            --head "$SYNC_BRANCH" \
+            --title "[SYNC] test → devx (PR #${{ github.event.pull_request.number }})" \
+            --body "Automated sync from PR #${{ github.event.pull_request.number }}<br><br>**Flow:** \`test\` → \`devx\`")
+          PR_NUMBER=$(echo $PR_URL | grep -oE '[0-9]+$')
+          gh pr merge $PR_NUMBER --merge --delete-branch --admin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create PR and leave open (has conflicts)
+        if: env.HAS_CONFLICT == 'true'
+        run: |
+          gh pr create \
+            --base "devx" \
+            --head "$SYNC_BRANCH" \
+            --title "[SYNC] test → devx (PR #${{ github.event.pull_request.number }}) - CONFLICT" \
+            --body "Conflict detected. Manual resolution required.<br>**Bazı commit'ler otomatik uygulanamadı:**<br>\`${{ env.FAILED_COMMITS }}\`"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
