@@ -46,7 +46,7 @@ jobs:
           else
             echo "Conflict detected — committing with markers for human review"
             git add -A
-            GIT_EDITOR=true git merge --continue --no-edit
+            git commit --no-verify -m "[SYNC CONFLICT] Manual resolution required"
             HAS_CONFLICT=true
           fi
 
@@ -129,7 +129,7 @@ jobs:
           else
             echo "Conflict detected — committing with markers for human review"
             git add -A
-            GIT_EDITOR=true git merge --continue --no-edit
+            git commit --no-verify -m "[SYNC CONFLICT] Manual resolution required"
             HAS_CONFLICT=true
           fi
 
