@@ -2,6 +2,3 @@
 method: processPayment()
 method: refundPayment()
 method: validateCard()
-method: emergencyPatch()      # hotfix: critical security fix
-method: notifyAgent()         # devx-only: agent notification
-method: calculateCommission() # devx-only: commission engine

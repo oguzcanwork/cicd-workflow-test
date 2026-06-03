@@ -1,4 +1,3 @@
 [API]
 route: POST /payments
 route: POST /payments/refund
-route: POST /payments/cancel  # new endpoint
