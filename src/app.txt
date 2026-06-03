@@ -1,3 +1,4 @@
 [App]
 version: 4.0.0
 env: production
+config: test-special=true
