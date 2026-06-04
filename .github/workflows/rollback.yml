@@ -1,0 +1,181 @@
+name: "[ROLLBACK] Branch Rollback"
+
+# Force-resets a target branch (test or prod) to a snapshot branch created
+# by the release workflow. Before resetting, the current state of the
+# target is saved as a `rolled-back-from/{target}/...` branch so the
+# rollback itself is reversible.
+#
+# Migration detection: if database/migrations/ changed between the snapshot
+# and the current target, a warning is surfaced but the rollback proceeds.
+# The DB will need a manual reconciliation step after code rollback.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Branch to roll back (test or prod)"
+        type: choice
+        options:
+          - test
+          - prod
+        required: true
+      snapshot_branch:
+        description: "Snapshot to restore from (e.g., snapshot/test/2026-06-04-090606-pre-release-12345)"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          TARGET="${{ inputs.target }}"
+          SNAPSHOT="${{ inputs.snapshot_branch }}"
+
+          # Snapshot must match snapshot/{target}/ prefix — prevents
+          # accidentally restoring prod from a test snapshot or vice versa.
+          EXPECTED_PREFIX="snapshot/${TARGET}/"
+          case "$SNAPSHOT" in
+            "${EXPECTED_PREFIX}"*)
+              echo "Snapshot prefix valid for target $TARGET"
+              ;;
+            *)
+              echo "::error::Snapshot '$SNAPSHOT' must start with '$EXPECTED_PREFIX'"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Verify snapshot exists
+        run: |
+          SNAPSHOT="${{ inputs.snapshot_branch }}"
+          if ! git ls-remote --exit-code origin "refs/heads/$SNAPSHOT" > /dev/null 2>&1; then
+            echo "::error::Snapshot branch '$SNAPSHOT' does not exist on remote"
+            exit 1
+          fi
+          echo "Snapshot exists on remote"
+
+      - name: Fetch target and snapshot
+        run: |
+          TARGET="${{ inputs.target }}"
+          SNAPSHOT="${{ inputs.snapshot_branch }}"
+          git fetch origin "$TARGET" "$SNAPSHOT"
+
+      - name: Check rollback necessity
+        run: |
+          TARGET="${{ inputs.target }}"
+          SNAPSHOT="${{ inputs.snapshot_branch }}"
+          SNAPSHOT_SHA=$(git rev-parse "origin/$SNAPSHOT")
+          TARGET_SHA=$(git rev-parse "origin/$TARGET")
+
+          echo "Snapshot SHA: $SNAPSHOT_SHA"
+          echo "Target SHA:   $TARGET_SHA"
+
+          if [ "$SNAPSHOT_SHA" = "$TARGET_SHA" ]; then
+            echo "::error::Snapshot and target are already at the same SHA — nothing to roll back"
+            exit 1
+          fi
+
+          if git merge-base --is-ancestor "$SNAPSHOT_SHA" "$TARGET_SHA"; then
+            echo "Snapshot is ancestor of target — normal rollback path (going backwards in history)"
+          else
+            echo "::warning::Snapshot is NOT an ancestor of target — target diverged outside normal release flow. Rollback will proceed but verify manually."
+          fi
+
+          echo "SNAPSHOT_SHA=$SNAPSHOT_SHA" >> $GITHUB_ENV
+          echo "TARGET_SHA=$TARGET_SHA" >> $GITHUB_ENV
+
+      - name: Detect migration changes
+        # Forward-only migrations: code rollback alone leaves the DB out of
+        # sync with the rolled-back code. Surface a warning with affected
+        # files so the operator can plan a manual reconciliation.
+        run: |
+          MIGRATION_CHANGES=$(git diff --name-only "$SNAPSHOT_SHA" "$TARGET_SHA" -- 'database/migrations/' 2>/dev/null || echo "")
+
+          if [ -n "$MIGRATION_CHANGES" ]; then
+            COUNT=$(echo "$MIGRATION_CHANGES" | wc -l)
+            echo "MIGRATION_WARNING=true" >> $GITHUB_ENV
+            echo "MIGRATION_COUNT=$COUNT" >> $GITHUB_ENV
+            {
+              echo "MIGRATION_FILES<<EOF"
+              echo "$MIGRATION_CHANGES"
+              echo "EOF"
+            } >> $GITHUB_ENV
+            echo "::warning::$COUNT migration files differ between snapshot and current target."
+            echo "$MIGRATION_CHANGES"
+          else
+            echo "MIGRATION_WARNING=false" >> $GITHUB_ENV
+            echo "No migration changes between snapshot and target."
+          fi
+
+      - name: Save current state before rollback
+        # Even though the rollback itself is what the operator wants, save
+        # the current SHA on a `rolled-back-from/...` branch so the action
+        # is reversible.
+        run: |
+          TARGET="${{ inputs.target }}"
+          TIMESTAMP=$(date -u +%Y-%m-%d-%H%M%S)
+          BACKUP_BRANCH="rolled-back-from/${TARGET}/${TIMESTAMP}-pre-rollback-${{ github.run_id }}"
+
+          git push origin "$TARGET_SHA:refs/heads/$BACKUP_BRANCH"
+          echo "BACKUP_BRANCH=$BACKUP_BRANCH" >> $GITHUB_ENV
+          echo "Pre-rollback state saved: $BACKUP_BRANCH @ $TARGET_SHA"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Force reset target to snapshot
+        run: |
+          TARGET="${{ inputs.target }}"
+          git push origin --force "$SNAPSHOT_SHA:refs/heads/$TARGET"
+          echo "Rollback complete: $TARGET → $SNAPSHOT_SHA"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Rollback Tamamlandı ✅" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Target** | \`${{ inputs.target }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Restored from** | \`${{ inputs.snapshot_branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **New SHA** | \`${{ env.SNAPSHOT_SHA }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Previous SHA (saved)** | \`${{ env.TARGET_SHA }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Pre-rollback backup** | \`${{ env.BACKUP_BRANCH }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tetikleyen** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ env.MIGRATION_WARNING }}" = "true" ]; then
+            echo "### ⚠️ Migration Uyarısı" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**${{ env.MIGRATION_COUNT }} migration dosyası snapshot ile mevcut target arasında değişmiş.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "DB forward-only çalıştığı için kod geri alındığında DB ileri durumda kalır. Manuel reconciliation gerekebilir." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Etkilenen dosyalar:**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "${{ env.MIGRATION_FILES }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ✅ Migration Durumu: Değişiklik Yok" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Snapshot ile mevcut target arasında \`database/migrations/\` altında değişiklik yok. DB tutarlı." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Reversibility" >> $GITHUB_STEP_SUMMARY
+          echo "Bu rollback'i geri almak istersen, \`${{ env.BACKUP_BRANCH }}\` branch'ini snapshot olarak kullanıp tekrar rollback dispatch et." >> $GITHUB_STEP_SUMMARY

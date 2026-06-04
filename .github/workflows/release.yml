@@ -1,5 +1,11 @@
 name: "[RELEASE] Branch Release"
 
+# Forward-only branch promotion: devx→test, test→prod.
+#
+# Before pushing FROM's SHA onto TO, this workflow saves TO's CURRENT state
+# as a snapshot branch (snapshot/{target}/...). The rollback workflow uses
+# these snapshots to restore TO to any prior release point.
+
 on:
   workflow_dispatch:
     inputs:
@@ -58,7 +64,28 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Fetch branches
-        run: git fetch origin ${{ inputs.from }} ${{ inputs.to }}
+        run: |
+          FROM="${{ inputs.from }}"
+          TO="${{ inputs.to }}"
+          git fetch origin "$FROM" "$TO"
+
+      - name: Create pre-release snapshot of target
+        # Capture TO's current state BEFORE any modification, so the rollback
+        # workflow can restore this exact point later. Always created — even
+        # if the release later turns out to be a no-op — to keep the snapshot
+        # cadence aligned 1:1 with release events.
+        run: |
+          TO="${{ inputs.to }}"
+          TARGET_SHA=$(git rev-parse origin/$TO)
+          TIMESTAMP=$(date -u +%Y-%m-%d-%H%M%S)
+          SNAPSHOT_BRANCH="snapshot/${TO}/${TIMESTAMP}-pre-release-${{ github.run_id }}"
+
+          git push origin "$TARGET_SHA:refs/heads/$SNAPSHOT_BRANCH"
+          echo "SNAPSHOT_BRANCH=$SNAPSHOT_BRANCH" >> $GITHUB_ENV
+          echo "SNAPSHOT_SHA=$TARGET_SHA" >> $GITHUB_ENV
+          echo "Snapshot created: $SNAPSHOT_BRANCH @ $TARGET_SHA"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check fast-forward eligibility
         run: |
@@ -96,7 +123,10 @@ jobs:
           echo "| **Flow** | \`${{ inputs.from }}\` → \`${{ inputs.to }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Yöntem** | Fast-forward (temiz tarih, merge commit yok) |" >> $GITHUB_STEP_SUMMARY
           echo "| **SHA** | \`${{ env.FF_SHA }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Snapshot** | \`${{ env.SNAPSHOT_BRANCH }}\` @ \`${{ env.SNAPSHOT_SHA }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Tetikleyen** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Rollback için \`rollback.yml\` workflow'unu dispatch et, snapshot olarak \`${{ env.SNAPSHOT_BRANCH }}\` gir._" >> $GITHUB_STEP_SUMMARY
 
       - name: Create merge PR (diverged branches)
         if: env.FF == 'false'
@@ -115,6 +145,7 @@ jobs:
             --body "## Release: \`$FROM\` → \`$TO\`
 
           **Tetikleyen:** ${{ github.actor }}
+          **Pre-release snapshot:** \`${{ env.SNAPSHOT_BRANCH }}\` @ \`${{ env.SNAPSHOT_SHA }}\`
 
           ### Neden bu PR açıldı?
           \`$TO\` branch'inde \`$FROM\`'da bulunmayan commit'ler tespit edildi — otomatik fast-forward yapılamadı.
@@ -125,6 +156,11 @@ jobs:
           - [ ] CI geçti
           - [ ] Diverge sebebi anlaşıldı
           - [ ] Merge güvenli
+
+          ### Rollback
+          Bu PR merge edildikten sonra geri dönmek için \`rollback.yml\` workflow'unu dispatch et:
+          - **Target:** \`$TO\`
+          - **Snapshot:** \`${{ env.SNAPSHOT_BRANCH }}\`
 
           _Auto-created by release workflow._")
 
@@ -142,4 +178,5 @@ jobs:
           echo "| **Flow** | \`${{ inputs.from }}\` → \`${{ inputs.to }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Sebep** | Branch'ler diverge — fast-forward yapılamadı |" >> $GITHUB_STEP_SUMMARY
           echo "| **PR** | ${{ env.PR_URL }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Snapshot** | \`${{ env.SNAPSHOT_BRANCH }}\` @ \`${{ env.SNAPSHOT_SHA }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Tetikleyen** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
